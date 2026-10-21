@@ -127,18 +127,35 @@ local function goTo(cf)
     return false
 end
 
+local attacking = false
+local VIM
+pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+local function toolMatches(tool)
+    if not tool:IsA("Tool") then return false end
+    local want = string.lower(Config.Weapon)
+    local tip = string.lower(tool.ToolTip or "")
+    if tip ~= "" then return tip == want end
+    return string.lower(tool.Name):find(want, 1, true) ~= nil
+end
+
+-- Equipa el arma elegida. Devuelve true si ya la tiene en la mano.
 local function equipWeapon()
     local char, hum = getChar(), getHum()
-    if not char or not hum then return end
+    if not char or not hum or hum.Health <= 0 then return false end
     for _, tool in ipairs(char:GetChildren()) do
-        if tool:IsA("Tool") and tool.ToolTip == Config.Weapon then return end
+        if toolMatches(tool) then return true end
     end
-    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
-        if tool:IsA("Tool") and tool.ToolTip == Config.Weapon then
-            hum:EquipTool(tool)
-            return
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if not bp then return false end
+    for _, tool in ipairs(bp:GetChildren()) do
+        if toolMatches(tool) then
+            pcall(function() hum:EquipTool(tool) end)
+            task.wait(0.15)
+            return true
         end
     end
+    return false
 end
 
 local function findMob(name)
@@ -189,26 +206,60 @@ local function ensureQuest(q)
     return t ~= nil and t:find(q.mob, 1, true) ~= nil
 end
 
+-- Un "clic" usando los 3 metodos a la vez (cada executor soporta distintos)
+local function clickOnce()
+    local char = getChar()
+    local tool = char and char:FindFirstChildOfClass("Tool")
+    if tool then pcall(function() tool:Activate() end) end
+    if VIM then
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            local vs = cam and cam.ViewportSize or Vector2.new(900, 500)
+            VIM:SendMouseButtonEvent(vs.X / 2, vs.Y / 2, 0, true, game, 0)
+            task.wait(0.02)
+            VIM:SendMouseButtonEvent(vs.X / 2, vs.Y / 2, 0, false, game, 0)
+        end)
+    end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.new(900, 500))
+        task.wait(0.02)
+        VirtualUser:Button1Up(Vector2.new(900, 500))
+    end)
+end
+
+-- Hilo aparte que hace clic mientras se esta atacando
+task.spawn(function()
+    while running do
+        if Config.Enabled and attacking then
+            clickOnce()
+            task.wait(0.08)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
 local function attack(mob)
     local r = mob:FindFirstChild("HumanoidRootPart")
     local h = mob:FindFirstChildOfClass("Humanoid")
-    local hrp = getHRP()
-    if not (r and h and hrp) then return end
-    if Config.AutoEquip then equipWeapon() end
+    if not (r and h and getHRP()) then return end
+    attacking = true
+    local lastEquip = 0
     while running and Config.Enabled and h.Health > 0 and mob.Parent and r.Parent do
-        hrp = getHRP()
+        local hrp = getHRP()
         if not hrp then break end
+        if Config.AutoEquip and os.clock() - lastEquip > 1 then
+            lastEquip = os.clock()
+            equipWeapon()
+        end
+        -- siempre ARRIBA del enemigo, mirando hacia abajo
         local above = r.Position + Vector3.new(0, Config.HoverHeight, 0)
-        hrp.CFrame = CFrame.lookAt(above, r.Position)
+        hrp.CFrame = CFrame.new(above) * CFrame.Angles(-math.pi / 2, 0, 0)
         hrp.AssemblyLinearVelocity = Vector3.zero
-        pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(Vector2.new(900, 500))
-            task.wait(0.05)
-            VirtualUser:Button1Up(Vector2.new(900, 500))
-        end)
-        task.wait(0.1)
+        RunService.Heartbeat:Wait()
     end
+    attacking = false
 end
 
 --// Noclip + antigravedad mientras se farmea (evita caer, atascos y empujones)
@@ -261,6 +312,7 @@ task.spawn(function()
                 Config.Mob = q.mob
                 Config.Quest = q.quest .. " #" .. q.idx
                 if not getHRP() then Config.Status = "Esperando personaje" task.wait(1) return end
+                if Config.AutoEquip then equipWeapon() end
 
                 if Config.AutoQuest and not ensureQuest(q) then
                     if Config.Enabled then Config.Status = "No se pudo aceptar la misión" task.wait(1) end
