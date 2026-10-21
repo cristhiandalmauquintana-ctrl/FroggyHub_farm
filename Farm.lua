@@ -14,7 +14,10 @@ local Config = {
     AutoQuest = true,
     AutoEquip = true,
     Weapon = "Melee",      -- Melee / Sword / Blox Fruit / Gun
-    HoverHeight = 10,      -- studs por encima del enemigo
+    HoverHeight = 8,       -- studs por encima del enemigo
+    BringMobs = true,      -- junta a los enemigos del mismo tipo en un punto
+    Hitbox = true,         -- agranda el hitbox del enemigo para que el M1 le llegue
+    HitboxSize = 40,       -- tamano del hitbox (studs)
     TweenSpeed = 300,      -- studs por segundo al viajar
     -- Estado (lo lee el panel)
     Status = "Apagado",
@@ -240,12 +243,58 @@ task.spawn(function()
     end
 end)
 
+local function enemiesFolder() return workspace:FindFirstChild("Enemies") end
+
+-- Posicion segura ARRIBA del enemigo (si el enemigo esta bajo el suelo, sube sobre el suelo)
+local function safeAbove(r)
+    local p = r.Position
+    local pos = p + Vector3.new(0, Config.HoverHeight, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local ignore = { getChar(), enemiesFolder(), workspace:FindFirstChild("Characters") }
+    local list = {}
+    for _, o in ipairs(ignore) do if o then list[#list + 1] = o end end
+    params.FilterDescendantsInstances = list
+    local hit = workspace:Raycast(p + Vector3.new(0, 30, 0), Vector3.new(0, -300, 0), params)
+    if hit and hit.Position.Y > p.Y - 1 then
+        pos = Vector3.new(p.X, hit.Position.Y + Config.HoverHeight, p.Z)
+    end
+    return pos
+end
+
+-- Junta a los enemigos del mismo nombre sobre el objetivo y agranda hitboxes
+local function prepareMobs(target)
+    local folder = enemiesFolder()
+    local tr = target:FindFirstChild("HumanoidRootPart")
+    if not (folder and tr) then return end
+    pcall(function()
+        if sethiddenproperty then sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end
+    end)
+    for _, e in ipairs(folder:GetChildren()) do
+        if e.Name == target.Name then
+            local r = e:FindFirstChild("HumanoidRootPart")
+            local h = e:FindFirstChildOfClass("Humanoid")
+            if r and h and h.Health > 0 then
+                if Config.BringMobs and e ~= target and (r.Position - tr.Position).Magnitude < 400 then
+                    r.CFrame = tr.CFrame
+                end
+                if Config.Hitbox then
+                    local s = Config.HitboxSize
+                    r.Size = Vector3.new(s, s, s)
+                    r.Transparency = 0.8
+                    r.CanCollide = false
+                end
+            end
+        end
+    end
+end
+
 local function attack(mob)
     local r = mob:FindFirstChild("HumanoidRootPart")
     local h = mob:FindFirstChildOfClass("Humanoid")
     if not (r and h and getHRP()) then return end
     attacking = true
-    local lastEquip = 0
+    local lastEquip, lastDbg = 0, 0
     while running and Config.Enabled and h.Health > 0 and mob.Parent and r.Parent do
         local hrp = getHRP()
         if not hrp then break end
@@ -253,10 +302,15 @@ local function attack(mob)
             lastEquip = os.clock()
             equipWeapon()
         end
+        if Config.BringMobs or Config.Hitbox then prepareMobs(mob) end
         -- siempre ARRIBA del enemigo, mirando hacia abajo
-        local above = r.Position + Vector3.new(0, Config.HoverHeight, 0)
+        local above = safeAbove(r)
         hrp.CFrame = CFrame.new(above) * CFrame.Angles(-math.pi / 2, 0, 0)
         hrp.AssemblyLinearVelocity = Vector3.zero
+        if os.clock() - lastDbg > 1 then
+            lastDbg = os.clock()
+            Config.Status = ("Atacando: %s (enemigo Y=%d, yo Y=%d)"):format(mob.Name, r.Position.Y, above.Y)
+        end
         RunService.Heartbeat:Wait()
     end
     attacking = false
