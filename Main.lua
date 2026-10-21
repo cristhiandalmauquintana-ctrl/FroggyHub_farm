@@ -1,7 +1,7 @@
 --// Main.lua - Froggy Hub AutoFarm (loader + panel grande con barra lateral)
 
 local GITHUB_USER = "cristhiandalmauquintana-ctrl"
-local GITHUB_REPO = "FroggyHub-AutoFarm" -- cambia esto por el nombre real de tu repo
+local GITHUB_REPO = "FroggyHub_AutoFarm" -- cambia esto por el nombre real de tu repo
 local BRANCH = "main"
 local FARM_FILES = { "Farm.lua", "farm.lua" }
 local LOGO_FILES = { "logo.png", "Logo.png" }
