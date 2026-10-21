@@ -94,20 +94,37 @@ local function questTitle()
     return ok and t or nil
 end
 
+-- Viaja hasta cf moviendo el HRP a mano cada frame. Devuelve true si llego.
+-- (TweenService se cancela/pelea con la fisica del juego; esto no)
 local function goTo(cf)
     local hrp = getHRP()
-    if not hrp then return end
-    local d = (hrp.Position - cf.Position).Magnitude
-    if d < 4 then hrp.CFrame = cf return end
-    local dur = d / math.max(50, Config.TweenSpeed)
-    local tw = TweenService:Create(hrp, TweenInfo.new(dur, Enum.EasingStyle.Linear), { CFrame = cf })
-    tw:Play()
+    if not hrp then return false end
+    local target = cf.Position
+    local speed = math.max(50, Config.TweenSpeed)
+    local budget = (hrp.Position - target).Magnitude / speed * 1.6 + 4
     local t0 = os.clock()
-    while running and Config.Enabled and tw.PlaybackState == Enum.PlaybackState.Playing
-        and os.clock() - t0 < dur + 1 do
-        task.wait()
+    while running and Config.Enabled do
+        hrp = getHRP()
+        if not hrp then return false end
+        local pos = hrp.Position
+        local diff = target - pos
+        local dist = diff.Magnitude
+        if dist < 4 then
+            hrp.CFrame = cf
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            return true
+        end
+        if os.clock() - t0 > budget then return false end
+        local dt = RunService.Heartbeat:Wait()
+        hrp = getHRP()
+        if not hrp then return false end
+        local step = math.min(dist, speed * dt)
+        local rot = hrp.CFrame - hrp.CFrame.Position
+        hrp.CFrame = CFrame.new(pos + diff.Unit * step) * rot
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
     end
-    tw:Cancel()
+    return false
 end
 
 local function equipWeapon()
@@ -159,8 +176,9 @@ local function ensureQuest(q)
     local remote = commF()
     if not remote then return false end
     Config.Status = "Yendo a la misión"
-    goTo(CFrame.new(q.pos + Vector3.new(0, 4, 0)))
+    local arrived = goTo(CFrame.new(q.pos + Vector3.new(0, 4, 0)))
     if not Config.Enabled then return false end
+    if not arrived then Config.Status = "No llego a la mision, reintentando" return false end
     if title then
         pcall(function() remote:InvokeServer("AbandonQuest") end)
         task.wait(0.3)
@@ -193,11 +211,27 @@ local function attack(mob)
     end
 end
 
---// Noclip mientras se farmea (evita atascos al flotar sobre el enemigo)
+--// Noclip + antigravedad mientras se farmea (evita caer, atascos y empujones)
+local function setHold(on)
+    local hrp = getHRP()
+    if not hrp then return end
+    local bv = hrp:FindFirstChild("FroggyHold")
+    if on and not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "FroggyHold"
+        bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = hrp
+    elseif not on and bv then
+        bv:Destroy()
+    end
+end
+
 table.insert(connections, RunService.Stepped:Connect(function()
-    if not Config.Enabled then return end
     local c = getChar()
     if not c then return end
+    if not Config.Enabled then setHold(false) return end
+    setHold(true)
     for _, p in ipairs(c:GetDescendants()) do
         if p:IsA("BasePart") then p.CanCollide = false end
     end
@@ -261,6 +295,7 @@ env.BF_FARM_CONFIG = Config
 env.__BF_FARM_CLEANUP = function()
     running = false
     Config.Enabled = false
+    pcall(setHold, false)
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     env.BF_FARM_CONFIG = nil
     env.__BF_FARM_CLEANUP = nil
