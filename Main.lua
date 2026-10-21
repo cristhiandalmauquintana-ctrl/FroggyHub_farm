@@ -1,7 +1,7 @@
 --// Main.lua - Froggy Hub AutoFarm (loader + panel grande con barra lateral)
 
 local GITHUB_USER = "cristhiandalmauquintana-ctrl"
-local GITHUB_REPO = "FroggyHub_AutoFarm" -- cambia esto por el nombre real de tu repo
+local GITHUB_REPO = "FroggyHub-AutoFarm" -- cambia esto por el nombre real de tu repo
 local BRANCH = "main"
 local FARM_FILES = { "Farm.lua", "farm.lua" }
 local LOGO_FILES = { "logo.png", "Logo.png" }
@@ -97,10 +97,47 @@ local function fail(msg)
     task.delay(5, cleanup)
 end
 
+local lastErr = "sin intentos"
+
+-- Intenta varios metodos de HTTP porque cada executor soporta unos distintos
+local function httpGet(url)
+    local errs = {}
+    local methods = {
+        function() return game:HttpGet(url) end,
+        function() return game:HttpGet(url, true) end,
+        function() return game.HttpGet(game, url) end,
+        function()
+            local req = (syn and syn.request) or (http and http.request) or http_request or request
+                or (fluxus and fluxus.request)
+            if not req then error("sin request()") end
+            local r = req({ Url = url, Method = "GET" })
+            local code = r.StatusCode or r.Status
+            if code and code ~= 200 then error("HTTP " .. tostring(code)) end
+            return r.Body
+        end,
+    }
+    for i, m in ipairs(methods) do
+        local ok, res = pcall(m)
+        if ok and type(res) == "string" and #res > 0 and res:sub(1, 3) ~= "404" then return res end
+        errs[#errs + 1] = i .. ":" .. tostring(ok and "respuesta vacia/404" or res):sub(1, 60)
+    end
+    return nil, table.concat(errs, " | ")
+end
+
 local function fetch(names)
     for _, name in ipairs(names) do
-        local ok, res = pcall(function() return game:HttpGet(BASE_URL .. name .. "?v=" .. os.time(), true) end)
-        if ok and type(res) == "string" and #res > 0 and res:sub(1, 3) ~= "404" then return res end
+        -- sin ?v= primero (algunos executors fallan con query string)
+        local urls = {
+            BASE_URL .. name,
+            BASE_URL .. name .. "?v=" .. os.time(),
+            ("https://cdn.jsdelivr.net/gh/%s/%s@%s/%s"):format(GITHUB_USER, GITHUB_REPO, BRANCH, name),
+        }
+        for _, url in ipairs(urls) do
+            local res, err = httpGet(url)
+            if res then return res end
+            lastErr = url .. " => " .. tostring(err)
+            warn("Froggy fetch fallo: " .. lastErr)
+        end
     end
 end
 
@@ -129,7 +166,7 @@ end
 
 setProgress(0.4, "Descargando Auto Farm...")
 local src = fetch(FARM_FILES)
-if not src then fail("No se pudo descargar Farm.lua.") return end
+if not src then fail("No se pudo descargar Farm.lua") warn(lastErr) return end
 local chunk, cErr = loadstring(src)
 if type(chunk) ~= "function" then fail("Error de sintaxis en Farm.lua: " .. tostring(cErr)) return end
 setProgress(0.7, "Iniciando Auto Farm...")
